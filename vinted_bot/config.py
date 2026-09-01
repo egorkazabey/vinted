@@ -16,6 +16,8 @@ class Config:
     max_notifications_per_poll: int
     log_file: str
     log_level: str
+    gemini_api_key: str
+    gemini_model: str
 
 
 def load_config() -> Config:
@@ -23,6 +25,13 @@ def load_config() -> Config:
     if not bot_token:
         raise RuntimeError(
             "BOT_TOKEN не задан. Скопируйте .env.example в .env и укажите токен бота."
+        )
+
+    gemini_api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not gemini_api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY не задан. Бот использует Gemini для оценки находок — "
+            "получите ключ на https://aistudio.google.com/apikey и укажите его в .env."
         )
 
     return Config(
@@ -34,4 +43,6 @@ def load_config() -> Config:
         max_notifications_per_poll=int(os.environ.get("MAX_NOTIFICATIONS_PER_POLL", "8")),
         log_file=os.environ.get("LOG_FILE", "bot.log"),
         log_level=os.environ.get("LOG_LEVEL", "INFO").strip().upper(),
+        gemini_api_key=gemini_api_key,
+        gemini_model=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip(),
     )
