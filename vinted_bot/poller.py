@@ -68,12 +68,18 @@ async def _notify(bot: Bot, chat_id: int, item: VintedItem, median_price: float)
             await bot.send_photo(chat_id, photo=item.photo_url, caption=caption, parse_mode="HTML")
         else:
             await bot.send_message(chat_id, caption, parse_mode="HTML")
+        logger.info(
+            "Отправлена находка чату %s: item=%s %r цена=%s%s медиана=%.0f%s",
+            chat_id, item.item_id, item.title, item.total_price, item.currency,
+            median_price, item.currency,
+        )
     except TelegramAPIError:
         logger.exception("Не удалось отправить уведомление в чат %s", chat_id)
 
 
 async def poll_once(bot: Bot, db: Database, vinted: VintedClient, config: Config) -> None:
     chat_ids = await db.get_active_chats_with_brands()
+    logger.debug("Опрашиваю %s активных чатов", len(chat_ids))
     for chat_id in chat_ids:
         try:
             chat = await db.get_chat(chat_id)
@@ -93,23 +99,30 @@ async def poll_once(bot: Bot, db: Database, vinted: VintedClient, config: Config
             if chat.last_seen_id == 0:
                 # Первый прогон для этого чата: не спамим всей историей,
                 # просто запоминаем текущую границу "новых" объявлений.
+                logger.info("Чат %s: первый опрос, запоминаю границу id=%s", chat_id, newest_id_in_batch)
                 await db.update_last_seen_id(chat_id, newest_id_in_batch)
                 continue
 
             new_items = [it for it in items if it.item_id > chat.last_seen_id]
             new_items.sort(key=lambda it: it.item_id)
 
+            if new_items:
+                logger.info("Чат %s: найдено %s новых объявлений", chat_id, len(new_items))
+
             brand_id_by_title = {b.brand_title.lower(): b.brand_id for b in brands}
 
             sent = 0
             for it in new_items:
                 if sent >= config.max_notifications_per_poll:
+                    logger.info("Чат %s: достигнут лимит уведомлений за опрос (%s)", chat_id, config.max_notifications_per_poll)
                     break
                 brand_id = brand_id_by_title.get(it.brand_title.lower())
                 if brand_id is None:
+                    logger.warning("Чат %s: не найден brand_id для %r, пропускаю item %s", chat_id, it.brand_title, it.item_id)
                     continue
                 median_price = await _find_deal_median(vinted, it, brand_id)
                 if median_price is None:
+                    logger.debug("Item %s (%r) не признан выгодным, пропускаю", it.item_id, it.title)
                     continue
                 await _notify(bot, chat_id, it, median_price)
                 sent += 1

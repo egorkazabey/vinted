@@ -110,6 +110,10 @@ async def _resolve_and_add(
         return
 
     added = await db.add_brand(message.chat.id, brand_id, candidate.title)
+    logger.info(
+        "Чат %s: бренд %r (id=%s) %s", message.chat.id, candidate.title, brand_id,
+        "добавлен" if added else "уже был в списке",
+    )
     await message.answer(
         f"Бренд «{candidate.title}» {'добавлен' if added else 'уже был в списке'}."
     )
@@ -156,6 +160,7 @@ async def cmd_removebrand(message: Message, command: CommandObject, db: Database
         return
 
     await db.remove_brand(message.chat.id, match.brand_id)
+    logger.info("Чат %s: бренд %r (id=%s) удалён", message.chat.id, match.brand_title, match.brand_id)
     await message.answer(f"Бренд «{match.brand_title}» удалён из отслеживания.")
 
 
@@ -184,12 +189,14 @@ async def cmd_setprice(message: Message, command: CommandObject, db: Database) -
         return
 
     await db.set_max_price(message.chat.id, price)
+    logger.info("Чат %s: установлена максимальная цена %s", message.chat.id, price)
     await message.answer(f"Максимальная цена установлена: {price:g}")
 
 
 @router.message(Command("noprice"))
 async def cmd_noprice(message: Message, db: Database) -> None:
     await db.set_max_price(message.chat.id, None)
+    logger.info("Чат %s: ограничение по цене снято", message.chat.id)
     await message.answer("Ограничение по цене снято.")
 
 
@@ -208,10 +215,12 @@ async def cmd_status(message: Message, db: Database) -> None:
 @router.message(Command("pause"))
 async def cmd_pause(message: Message, db: Database) -> None:
     await db.set_active(message.chat.id, False)
+    logger.info("Чат %s: уведомления приостановлены", message.chat.id)
     await message.answer("Уведомления приостановлены. Возобновить: /resume")
 
 
 @router.message(Command("resume"))
 async def cmd_resume(message: Message, db: Database) -> None:
     await db.set_active(message.chat.id, True)
+    logger.info("Чат %s: уведомления возобновлены", message.chat.id)
     await message.answer("Уведомления возобновлены.")

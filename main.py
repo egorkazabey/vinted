@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -10,15 +11,29 @@ from vinted_bot.handlers import router
 from vinted_bot.poller import poll_loop
 from vinted_bot.vinted_client import VintedClient
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
 logger = logging.getLogger(__name__)
+
+
+def setup_logging(log_file: str, log_level: str) -> None:
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    file_handler = RotatingFileHandler(
+        log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+
+    root = logging.getLogger()
+    root.setLevel(log_level)
+    root.addHandler(console_handler)
+    root.addHandler(file_handler)
 
 
 async def main() -> None:
     config = load_config()
+    setup_logging(config.log_file, config.log_level)
 
     db = Database(config.db_path)
     await db.connect()

@@ -14,6 +14,8 @@ class Config:
     db_path: str
     items_per_page: int
     max_notifications_per_poll: int
+    log_file: str
+    log_level: str
 
 
 def load_config() -> Config:
@@ -30,4 +32,6 @@ def load_config() -> Config:
         db_path=os.environ.get("DB_PATH", "vinted_bot.sqlite3"),
         items_per_page=int(os.environ.get("ITEMS_PER_PAGE", "20")),
         max_notifications_per_poll=int(os.environ.get("MAX_NOTIFICATIONS_PER_POLL", "8")),
+        log_file=os.environ.get("LOG_FILE", "bot.log"),
+        log_level=os.environ.get("LOG_LEVEL", "INFO").strip().upper(),
     )
