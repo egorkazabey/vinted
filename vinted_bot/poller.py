@@ -7,47 +7,60 @@ from aiogram.exceptions import TelegramAPIError
 
 from .config import Config
 from .db import Database
+from .gemini_client import GeminiClient
 from .vinted_client import VintedClient, VintedItem
 
 logger = logging.getLogger(__name__)
 
 # Присылаем вещь только если она минимум на столько дешевле медианной цены
 # похожих активных объявлений (тот же бренд + похожее название) — грубая
-# прикидка "можно перепродать дороже", других источников рыночной цены у нас нет.
+# прикидка "можно перепродать дороже". Используется как основной фильтр, если
+# Gemini недоступен (нет GEMINI_API_KEY), и как источник рыночного контекста для
+# самого Gemini, когда он есть.
 DEAL_MAX_PRICE_RATIO = 0.8
 DEAL_MIN_SIMILAR_SAMPLES = 3
 
 
-async def _find_deal_median(
-    vinted: VintedClient, item: VintedItem, brand_id: int
-) -> float | None:
+async def _evaluate_item(
+    vinted: VintedClient, gemini: GeminiClient | None, item: VintedItem, brand_id: int
+) -> tuple[float | None, str | None] | None:
+    """Решает, стоит ли слать вещь. Возвращает (медианная цена похожих, обоснование Gemini) или None."""
     try:
         prices = await vinted.fetch_similar_total_prices(item.title, brand_id, item.item_id)
     except Exception:
-        logger.exception("Не удалось оценить похожие цены для item %s", item.item_id)
-        return None
+        logger.exception("Не удалось получить похожие цены для item %s", item.item_id)
+        prices = []
 
-    if len(prices) < DEAL_MIN_SIMILAR_SAMPLES:
-        return None
+    median_price = statistics.median(prices) if len(prices) >= DEAL_MIN_SIMILAR_SAMPLES else None
 
-    median_price = statistics.median(prices)
+    if gemini is not None:
+        verdict = await gemini.evaluate_deal(item, median_price, len(prices))
+        if verdict is None or not verdict.is_good_deal:
+            return None
+        return median_price, verdict.reason
+
+    # Gemini недоступен — старая эвристика по цене, без рыночного контекста не судим.
+    if median_price is None:
+        return None
     try:
         item_price = float(item.total_price)
     except ValueError:
         return None
-
     if item_price <= median_price * DEAL_MAX_PRICE_RATIO:
-        return median_price
+        return median_price, None
     return None
 
 
-def _format_caption(item: VintedItem, median_price: float) -> str:
+def _format_caption(item: VintedItem, median_price: float | None, reason: str | None) -> str:
     lines = [f"<b>{item.title}</b>"]
     price_line = f"{item.total_price} {item.currency}"
     if item.brand_title:
         price_line = f"{item.brand_title} — {price_line}"
     lines.append(price_line)
-    lines.append(f"💰 похожие объявления обычно от ~{median_price:.0f} {item.currency}")
+    if median_price is not None:
+        lines.append(f"💰 похожие объявления обычно от ~{median_price:.0f} {item.currency}")
+    if reason:
+        lines.append(f"🤖 {reason}")
     details = []
     if item.size_title:
         details.append(f"размер {item.size_title}")
@@ -61,23 +74,26 @@ def _format_caption(item: VintedItem, median_price: float) -> str:
     return "\n".join(lines)
 
 
-async def _notify(bot: Bot, chat_id: int, item: VintedItem, median_price: float) -> None:
-    caption = _format_caption(item, median_price)
+async def _notify(
+    bot: Bot, chat_id: int, item: VintedItem, median_price: float | None, reason: str | None
+) -> None:
+    caption = _format_caption(item, median_price, reason)
     try:
         if item.photo_url:
             await bot.send_photo(chat_id, photo=item.photo_url, caption=caption, parse_mode="HTML")
         else:
             await bot.send_message(chat_id, caption, parse_mode="HTML")
         logger.info(
-            "Отправлена находка чату %s: item=%s %r цена=%s%s медиана=%.0f%s",
+            "Отправлена находка чату %s: item=%s %r цена=%s%s",
             chat_id, item.item_id, item.title, item.total_price, item.currency,
-            median_price, item.currency,
         )
     except TelegramAPIError:
         logger.exception("Не удалось отправить уведомление в чат %s", chat_id)
 
 
-async def poll_once(bot: Bot, db: Database, vinted: VintedClient, config: Config) -> None:
+async def poll_once(
+    bot: Bot, db: Database, vinted: VintedClient, gemini: GeminiClient | None, config: Config
+) -> None:
     chat_ids = await db.get_active_chats_with_brands()
     logger.debug("Опрашиваю %s активных чатов", len(chat_ids))
     for chat_id in chat_ids:
@@ -120,11 +136,12 @@ async def poll_once(bot: Bot, db: Database, vinted: VintedClient, config: Config
                 if brand_id is None:
                     logger.warning("Чат %s: не найден brand_id для %r, пропускаю item %s", chat_id, it.brand_title, it.item_id)
                     continue
-                median_price = await _find_deal_median(vinted, it, brand_id)
-                if median_price is None:
+                evaluation = await _evaluate_item(vinted, gemini, it, brand_id)
+                if evaluation is None:
                     logger.debug("Item %s (%r) не признан выгодным, пропускаю", it.item_id, it.title)
                     continue
-                await _notify(bot, chat_id, it, median_price)
+                median_price, reason = evaluation
+                await _notify(bot, chat_id, it, median_price, reason)
                 sent += 1
 
             await db.update_last_seen_id(chat_id, max(newest_id_in_batch, chat.last_seen_id))
@@ -133,10 +150,12 @@ async def poll_once(bot: Bot, db: Database, vinted: VintedClient, config: Config
             logger.exception("Ошибка при опросе Vinted для чата %s", chat_id)
 
 
-async def poll_loop(bot: Bot, db: Database, vinted: VintedClient, config: Config) -> None:
+async def poll_loop(
+    bot: Bot, db: Database, vinted: VintedClient, gemini: GeminiClient | None, config: Config
+) -> None:
     while True:
         try:
-            await poll_once(bot, db, vinted, config)
+            await poll_once(bot, db, vinted, gemini, config)
         except Exception:
             logger.exception("Опрос Vinted упал с ошибкой, продолжаю после паузы")
         await asyncio.sleep(config.poll_interval_seconds)
