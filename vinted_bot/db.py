@@ -1,6 +1,10 @@
+import logging
+import os
 from dataclasses import dataclass
 
 import aiosqlite
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -39,10 +43,18 @@ class Database:
         self._conn: aiosqlite.Connection | None = None
 
     async def connect(self) -> None:
+        abs_path = os.path.abspath(self._db_path)
+        existed_before = os.path.exists(abs_path)
         self._conn = await aiosqlite.connect(self._db_path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.executescript(SCHEMA)
         await self._conn.commit()
+        async with self._conn.execute("SELECT COUNT(*) FROM brands") as cur:
+            row = await cur.fetchone()
+        logger.info(
+            "БД: %s (файл %s), брендов в базе: %s",
+            abs_path, "уже существовал" if existed_before else "создан заново", row[0],
+        )
 
     async def close(self) -> None:
         if self._conn is not None:
