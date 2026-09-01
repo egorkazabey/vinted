@@ -135,5 +135,8 @@ async def poll_once(bot: Bot, db: Database, vinted: VintedClient, config: Config
 
 async def poll_loop(bot: Bot, db: Database, vinted: VintedClient, config: Config) -> None:
     while True:
-        await poll_once(bot, db, vinted, config)
+        try:
+            await poll_once(bot, db, vinted, config)
+        except Exception:
+            logger.exception("Опрос Vinted упал с ошибкой, продолжаю после паузы")
         await asyncio.sleep(config.poll_interval_seconds)

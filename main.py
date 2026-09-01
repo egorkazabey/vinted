@@ -48,6 +48,15 @@ async def main() -> None:
 
     poller_task = asyncio.create_task(poll_loop(bot, db, vinted, config))
 
+    def _log_poller_crash(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("poller_task неожиданно завершился с ошибкой", exc_info=exc)
+
+    poller_task.add_done_callback(_log_poller_crash)
+
     try:
         await dp.start_polling(bot)
     finally:
