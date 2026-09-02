@@ -7,7 +7,6 @@ from aiogram.client.default import DefaultBotProperties
 
 from vinted_bot.config import load_config
 from vinted_bot.db import Database
-from vinted_bot.gemini_client import GeminiClient
 from vinted_bot.handlers import router
 from vinted_bot.poller import poll_loop
 from vinted_bot.vinted_client import VintedClient
@@ -41,22 +40,13 @@ async def main() -> None:
 
     vinted = VintedClient(config.vinted_domain)
 
-    gemini: GeminiClient | None = None
-    if config.gemini_api_key:
-        gemini = GeminiClient(config.gemini_api_key, config.gemini_model)
-        logger.info("Gemini включён (модель %s) — фильтрую находки через ИИ", config.gemini_model)
-    else:
-        logger.warning(
-            "GEMINI_API_KEY не задан — использую эвристику по медиане цены вместо ИИ-фильтра"
-        )
-
     bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher()
     dp.include_router(router)
     dp["db"] = db
     dp["vinted"] = vinted
 
-    poller_task = asyncio.create_task(poll_loop(bot, db, vinted, gemini, config))
+    poller_task = asyncio.create_task(poll_loop(bot, db, vinted, config))
 
     def _log_poller_crash(task: asyncio.Task) -> None:
         if task.cancelled():
@@ -72,8 +62,6 @@ async def main() -> None:
     finally:
         poller_task.cancel()
         await vinted.close()
-        if gemini is not None:
-            await gemini.close()
         await db.close()
         await bot.session.close()
 
